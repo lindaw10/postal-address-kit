@@ -1,0 +1,14 @@
+[package]
+name = "addrkit"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "A small library and CLI for normalizing and formatting postal addresses"
+
+[lib]
+name = "addrkit"
+path = "src/lib.rs"
+
+[[bin]]
+name = "addrkit"
+path = "src/main.rs"
