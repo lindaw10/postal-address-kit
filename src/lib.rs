@@ -182,6 +182,90 @@ pub fn format_us_address(address: &Address) -> String {
     lines.join("\n")
 }
 
+/// Parses a freeform US address string into an [`Address`].
+///
+/// Accepts either the multi-line block that [`format_us_address`]
+/// produces or a single comma-separated line - input is split on both
+/// newlines and commas, so callers don't need to know or care which
+/// style they're feeding in. The last segment is read as
+/// "region [postal code]", the segment before that as the city, and
+/// whatever is left at the front as recipient and street lines: a
+/// leading segment that starts with a digit is assumed to be a street
+/// line rather than a recipient name.
+///
+/// This is a heuristic splitter, not a real address-parsing engine -
+/// it has no knowledge of actual street or place names, so ambiguous
+/// input (a single segment with no other context) gets assigned
+/// somewhere reasonable rather than rejected. Run the result through
+/// [`validate`] if you need to confirm the required fields actually
+/// came out non-empty.
+pub fn parse_us_address(input: &str) -> Address {
+    let mut segments: Vec<String> = input
+        .split(|c| c == '\n' || c == ',')
+        .map(normalize_whitespace)
+        .filter(|s| !s.is_empty())
+        .collect();
+
+    let mut address = Address::default();
+
+    if segments.is_empty() {
+        return address;
+    }
+
+    if is_domestic_us(segments.last().unwrap()) {
+        address.country = segments.pop().unwrap();
+    }
+
+    if segments.is_empty() {
+        return address;
+    }
+
+    let locality = segments.pop().unwrap();
+    let mut tokens: Vec<&str> = locality.split_whitespace().collect();
+    if let Some(last_token) = tokens.last() {
+        if last_token.chars().any(|c| c.is_ascii_digit()) {
+            let raw_postal = tokens.pop().unwrap();
+            address.postal_code =
+                normalize_us_postal_code(raw_postal).unwrap_or_else(|| raw_postal.to_string());
+        }
+    }
+    address.region = tokens.join(" ");
+
+    if let Some(city) = segments.pop() {
+        address.city = city;
+    }
+
+    if segments.is_empty() {
+        return address;
+    }
+
+    if starts_with_digit(&segments[0]) {
+        address.street1 = segments.remove(0);
+    } else {
+        address.recipient = segments.remove(0);
+        if !segments.is_empty() {
+            address.street1 = segments.remove(0);
+        }
+    }
+    if !segments.is_empty() {
+        address.street2 = segments.join(", ");
+    }
+
+    address
+}
+
+/// Reports whether a segment's first word starts with a digit, the
+/// signal [`parse_us_address`] uses to tell a street line ("123 Main
+/// St") apart from a recipient name at the front of the input.
+fn starts_with_digit(segment: &str) -> bool {
+    segment
+        .split_whitespace()
+        .next()
+        .and_then(|word| word.chars().next())
+        .map(|c| c.is_ascii_digit())
+        .unwrap_or(false)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -272,5 +356,74 @@ mod tests {
     #[test]
     fn validate_accepts_complete_address() {
         assert!(validate(&sample()).is_empty());
+    }
+
+    #[test]
+    fn parse_us_address_reads_multiline_block() {
+        let parsed = parse_us_address("Jane Doe\n123 Main St\nApt 4B\nSpringfield, IL 62704");
+        assert_eq!(parsed.recipient, "Jane Doe");
+        assert_eq!(parsed.street1, "123 Main St");
+        assert_eq!(parsed.street2, "Apt 4B");
+        assert_eq!(parsed.city, "Springfield");
+        assert_eq!(parsed.region, "IL");
+        assert_eq!(parsed.postal_code, "62704");
+        assert_eq!(parsed.country, "");
+    }
+
+    #[test]
+    fn parse_us_address_reads_single_comma_separated_line() {
+        let parsed =
+            parse_us_address("Jane Doe, 123 Main St, Apt 4B, Springfield, IL 62704, USA");
+        assert_eq!(parsed.recipient, "Jane Doe");
+        assert_eq!(parsed.street1, "123 Main St");
+        assert_eq!(parsed.street2, "Apt 4B");
+        assert_eq!(parsed.city, "Springfield");
+        assert_eq!(parsed.region, "IL");
+        assert_eq!(parsed.postal_code, "62704");
+        assert_eq!(parsed.country, "USA");
+    }
+
+    #[test]
+    fn parse_us_address_normalizes_zip_plus_four_and_junk_whitespace() {
+        let parsed = parse_us_address("123  Main St\nSpringfield,   IL   62704-1234");
+        assert_eq!(parsed.street1, "123 Main St");
+        assert_eq!(parsed.postal_code, "62704-1234");
+    }
+
+    #[test]
+    fn parse_us_address_without_recipient_treats_leading_digits_as_street() {
+        let parsed = parse_us_address("123 Main St, Springfield, IL 62704");
+        assert_eq!(parsed.recipient, "");
+        assert_eq!(parsed.street1, "123 Main St");
+        assert_eq!(parsed.street2, "");
+    }
+
+    #[test]
+    fn parse_us_address_handles_city_region_postal_only() {
+        let parsed = parse_us_address("Springfield, IL 62704");
+        assert_eq!(parsed.recipient, "");
+        assert_eq!(parsed.street1, "");
+        assert_eq!(parsed.city, "Springfield");
+        assert_eq!(parsed.region, "IL");
+        assert_eq!(parsed.postal_code, "62704");
+    }
+
+    #[test]
+    fn parse_us_address_of_empty_string_is_default() {
+        assert_eq!(parse_us_address(""), Address::default());
+        assert_eq!(parse_us_address("   \n , "), Address::default());
+    }
+
+    #[test]
+    fn parse_us_address_round_trips_through_format() {
+        let original = sample();
+        let block = format_us_address(&original);
+        let parsed = parse_us_address(&block);
+        assert_eq!(parsed.recipient, original.recipient.trim());
+        assert_eq!(parsed.street1, original.street1);
+        assert_eq!(parsed.street2, original.street2);
+        assert_eq!(parsed.city, original.city);
+        assert_eq!(parsed.region, original.region);
+        assert_eq!(parsed.postal_code, original.postal_code);
     }
 }

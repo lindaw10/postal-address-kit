@@ -30,7 +30,7 @@ logic of its own worth testing separately.
 ## Library usage
 
 ```rust
-use addrkit::{format_us_address, validate, Address};
+use addrkit::{format_us_address, parse_us_address, validate, Address};
 
 let address = Address {
     recipient: "Jane Doe".to_string(),
@@ -49,6 +49,10 @@ println!("{}", format_us_address(&address));
 // 123 Main St
 // Apt 4B
 // Springfield, IL 62704
+
+let parsed = parse_us_address("Jane Doe, 123 Main St, Apt 4B, Springfield, IL 62704");
+assert_eq!(parsed.city, address.city);
+assert_eq!(parsed.postal_code, address.postal_code);
 ```
 
 ## CLI usage
@@ -69,17 +73,29 @@ Springfield, IL 62704
 $ addrkit validate --recipient "Jane Doe" --street1 "123 Main St"
 city is missing
 region is missing
+
+$ addrkit parse "Jane Doe, 123 Main St, Apt 4B, Springfield, IL 62704"
+Jane Doe
+123 Main St
+Apt 4B
+Springfield, IL 62704
 ```
+
+`parse` splits on both commas and newlines, so a pasted multi-line
+block works the same way. It's a heuristic, not a real parsing engine:
+it doesn't know street or place names, it just uses field order and a
+few shape checks (does a line start with a digit, does it end in
+something with digits in it) to guess where recipient, street, city,
+region, and postal code start and stop.
 
 ## Status
 
-Early skeleton. US formatting and structural validation work; parsing
-freeform address text into fields, international formats, and a
-reference table of state/province codes are not built yet (see below).
+Early skeleton. US formatting, structural validation, and freeform
+parsing work; international formats and a reference table of
+state/province codes are not built yet (see below).
 
 ## Roadmap
 
-- Freeform address parser (single string -> `Address`)
 - State/province code table with format-aware validation
 - Basic international address formats beyond the US
 - `--json` output mode for the CLI
