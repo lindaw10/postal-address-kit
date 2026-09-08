@@ -90,13 +90,18 @@ region, and postal code start and stop.
 
 ## Status
 
-Early skeleton. US formatting, structural validation, and freeform
-parsing work; international formats and a reference table of
-state/province codes are not built yet (see below).
+Early skeleton. US formatting, structural validation, freeform parsing,
+and a US state/DC/territory code table are in place; international
+formats are not built yet (see below).
+
+`validate` checks the `region` field against that table - `"Illinois"`,
+`"illinois"`, and `"IL"` all pass, anything else doesn't - but only for
+addresses that look domestic (a blank or US `country` field). A region
+paired with a non-US country is left alone, since the table has nothing
+to say about a Canadian province or a UK county.
 
 ## Roadmap
 
-- State/province code table with format-aware validation
 - Basic international address formats beyond the US
 - `--json` output mode for the CLI
 - Property-based tests for the normalization functions

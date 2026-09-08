@@ -60,6 +60,100 @@ fn is_domestic_us(country: &str) -> bool {
     )
 }
 
+/// The states, DC, and inhabited territories the USPS assigns a
+/// two-letter code to, paired with their full names.
+///
+/// Military "state" codes (AA, AE, AP) are deliberately left out: they
+/// don't have a single associated place name, so they don't fit the
+/// name-or-abbreviation lookup [`normalize_us_region`] does.
+const US_STATES: &[(&str, &str)] = &[
+    ("Alabama", "AL"),
+    ("Alaska", "AK"),
+    ("Arizona", "AZ"),
+    ("Arkansas", "AR"),
+    ("California", "CA"),
+    ("Colorado", "CO"),
+    ("Connecticut", "CT"),
+    ("Delaware", "DE"),
+    ("District of Columbia", "DC"),
+    ("Florida", "FL"),
+    ("Georgia", "GA"),
+    ("Hawaii", "HI"),
+    ("Idaho", "ID"),
+    ("Illinois", "IL"),
+    ("Indiana", "IN"),
+    ("Iowa", "IA"),
+    ("Kansas", "KS"),
+    ("Kentucky", "KY"),
+    ("Louisiana", "LA"),
+    ("Maine", "ME"),
+    ("Maryland", "MD"),
+    ("Massachusetts", "MA"),
+    ("Michigan", "MI"),
+    ("Minnesota", "MN"),
+    ("Mississippi", "MS"),
+    ("Missouri", "MO"),
+    ("Montana", "MT"),
+    ("Nebraska", "NE"),
+    ("Nevada", "NV"),
+    ("New Hampshire", "NH"),
+    ("New Jersey", "NJ"),
+    ("New Mexico", "NM"),
+    ("New York", "NY"),
+    ("North Carolina", "NC"),
+    ("North Dakota", "ND"),
+    ("Ohio", "OH"),
+    ("Oklahoma", "OK"),
+    ("Oregon", "OR"),
+    ("Pennsylvania", "PA"),
+    ("Rhode Island", "RI"),
+    ("South Carolina", "SC"),
+    ("South Dakota", "SD"),
+    ("Tennessee", "TN"),
+    ("Texas", "TX"),
+    ("Utah", "UT"),
+    ("Vermont", "VT"),
+    ("Virginia", "VA"),
+    ("Washington", "WA"),
+    ("West Virginia", "WV"),
+    ("Wisconsin", "WI"),
+    ("Wyoming", "WY"),
+    ("American Samoa", "AS"),
+    ("Guam", "GU"),
+    ("Northern Mariana Islands", "MP"),
+    ("Puerto Rico", "PR"),
+    ("U.S. Virgin Islands", "VI"),
+];
+
+/// Normalizes a US state, DC, or territory name or abbreviation to its
+/// canonical two-letter code.
+///
+/// Accepts either form case-insensitively - `"illinois"`, `"Illinois"`,
+/// and `"il"` all normalize to `"IL"` - since freeform input and form
+/// fields disagree about which one to use. Returns `None` if the input
+/// isn't a two-letter code or full name in the state table, which is
+/// how [`validate`] tells a real US region apart from a typo or a
+/// foreign province.
+pub fn normalize_us_region(input: &str) -> Option<String> {
+    let cleaned = normalize_whitespace(input);
+    if cleaned.is_empty() {
+        return None;
+    }
+    let upper = cleaned.to_uppercase();
+
+    if cleaned.chars().count() == 2 {
+        return US_STATES
+            .iter()
+            .find(|(_, abbr)| *abbr == upper)
+            .map(|(_, abbr)| abbr.to_string());
+    }
+
+    US_STATES
+        .iter()
+        .find(|(name, _)| name.to_uppercase() == upper)
+        .map(|(_, abbr)| abbr.to_string())
+}
+
 /// A single problem found by [`validate`].
 ///
 /// Kept as a small enum rather than raw strings so callers (including
@@ -70,6 +164,7 @@ pub enum ValidationIssue {
     MissingStreet,
     MissingCity,
     MissingRegion,
+    InvalidRegion(String),
     InvalidPostalCode(String),
 }
 
@@ -80,6 +175,9 @@ impl fmt::Display for ValidationIssue {
             ValidationIssue::MissingStreet => write!(f, "street1 is missing"),
             ValidationIssue::MissingCity => write!(f, "city is missing"),
             ValidationIssue::MissingRegion => write!(f, "region is missing"),
+            ValidationIssue::InvalidRegion(raw) => {
+                write!(f, "region '{raw}' is not a recognized US state, DC, or territory")
+            }
             ValidationIssue::InvalidPostalCode(raw) => {
                 write!(f, "postal code '{raw}' is not a valid 5 or 9 digit US code")
             }
@@ -91,9 +189,18 @@ impl fmt::Display for ValidationIssue {
 /// deliverable, without trying to guess at fixes.
 ///
 /// This only validates structure (which fields are present, whether
-/// the postal code has a plausible shape), not whether the address
-/// actually exists. That kind of lookup needs a data source and does
-/// not belong in a pure function.
+/// the postal code has a plausible shape, whether the region is a
+/// real US state/DC/territory), not whether the address actually
+/// exists. That kind of lookup needs a data source and does not
+/// belong in a pure function.
+///
+/// The region check only runs for addresses that look domestic (an
+/// empty or US-flavored `country` field): a blank country is the
+/// common case for addresses that never had one to begin with, and
+/// treating it as domestic matches [`format_us_address`], which also
+/// only adds a country line for non-US addresses. Addresses with a
+/// foreign `country` skip the check entirely, since the state table
+/// has nothing to say about a Canadian province or a UK county.
 pub fn validate(address: &Address) -> Vec<ValidationIssue> {
     let mut issues = Vec::new();
 
@@ -106,8 +213,15 @@ pub fn validate(address: &Address) -> Vec<ValidationIssue> {
     if normalize_whitespace(&address.city).is_empty() {
         issues.push(ValidationIssue::MissingCity);
     }
-    if normalize_whitespace(&address.region).is_empty() {
+
+    let region = normalize_whitespace(&address.region);
+    let country = normalize_whitespace(&address.country);
+    if region.is_empty() {
         issues.push(ValidationIssue::MissingRegion);
+    } else if (country.is_empty() || is_domestic_us(&country))
+        && normalize_us_region(&region).is_none()
+    {
+        issues.push(ValidationIssue::InvalidRegion(region));
     }
 
     let postal = normalize_whitespace(&address.postal_code);
@@ -128,9 +242,13 @@ pub fn validate(address: &Address) -> Vec<ValidationIssue> {
 /// ```
 ///
 /// Blank fields are skipped rather than left as empty lines, and the
-/// country line is omitted for domestic addresses. This never fails;
-/// pass the result through [`validate`] first if you need to know
-/// whether the input was actually complete.
+/// country line is omitted for domestic addresses. A region that
+/// matches a known US state, DC, or territory name is canonicalized
+/// to its two-letter code (`"Illinois"` becomes `"IL"`); anything
+/// else, including a region that's already an unrecognized code, is
+/// passed through unchanged. This never fails; pass the result
+/// through [`validate`] first if you need to know whether the input
+/// was actually complete.
 pub fn format_us_address(address: &Address) -> String {
     let mut lines = Vec::new();
 
@@ -150,7 +268,8 @@ pub fn format_us_address(address: &Address) -> String {
     }
 
     let city = normalize_whitespace(&address.city);
-    let region = normalize_whitespace(&address.region);
+    let region_raw = normalize_whitespace(&address.region);
+    let region = normalize_us_region(&region_raw).unwrap_or(region_raw);
     let postal_raw = normalize_whitespace(&address.postal_code);
     let postal = normalize_us_postal_code(&postal_raw).unwrap_or(postal_raw);
 
@@ -302,6 +421,35 @@ mod tests {
     }
 
     #[test]
+    fn normalize_us_region_accepts_abbreviation_case_insensitively() {
+        assert_eq!(normalize_us_region("il"), Some("IL".to_string()));
+        assert_eq!(normalize_us_region("Il"), Some("IL".to_string()));
+    }
+
+    #[test]
+    fn normalize_us_region_accepts_full_name_case_insensitively() {
+        assert_eq!(normalize_us_region("illinois"), Some("IL".to_string()));
+        assert_eq!(normalize_us_region("  New   York "), Some("NY".to_string()));
+    }
+
+    #[test]
+    fn normalize_us_region_accepts_dc_and_territories() {
+        assert_eq!(
+            normalize_us_region("District of Columbia"),
+            Some("DC".to_string())
+        );
+        assert_eq!(normalize_us_region("pr"), Some("PR".to_string()));
+        assert_eq!(normalize_us_region("Puerto Rico"), Some("PR".to_string()));
+    }
+
+    #[test]
+    fn normalize_us_region_rejects_unknown_values() {
+        assert_eq!(normalize_us_region("Ontario"), None);
+        assert_eq!(normalize_us_region("ZZ"), None);
+        assert_eq!(normalize_us_region(""), None);
+    }
+
+    #[test]
     fn normalize_us_postal_code_rejects_bad_length() {
         assert_eq!(normalize_us_postal_code("1234"), None);
         assert_eq!(normalize_us_postal_code(""), None);
@@ -334,12 +482,69 @@ mod tests {
     }
 
     #[test]
+    fn format_us_address_canonicalizes_full_state_name() {
+        let mut addr = sample();
+        addr.region = "Illinois".to_string();
+        let formatted = format_us_address(&addr);
+        assert_eq!(
+            formatted,
+            "Jane Doe\n123 Main St\nApt 4B\nSpringfield, IL 62704"
+        );
+    }
+
+    #[test]
+    fn format_us_address_passes_through_unrecognized_region() {
+        let mut addr = sample();
+        addr.region = "Ontario".to_string();
+        let formatted = format_us_address(&addr);
+        assert!(formatted.contains("Springfield, Ontario 62704"));
+    }
+
+    #[test]
     fn validate_flags_missing_required_fields() {
         let issues = validate(&Address::default());
         assert!(issues.contains(&ValidationIssue::MissingRecipient));
         assert!(issues.contains(&ValidationIssue::MissingStreet));
         assert!(issues.contains(&ValidationIssue::MissingCity));
         assert!(issues.contains(&ValidationIssue::MissingRegion));
+    }
+
+    #[test]
+    fn validate_flags_unrecognized_region_for_domestic_address() {
+        let mut addr = sample();
+        addr.region = "Not A State".to_string();
+        let issues = validate(&addr);
+        assert_eq!(
+            issues,
+            vec![ValidationIssue::InvalidRegion("Not A State".to_string())]
+        );
+    }
+
+    #[test]
+    fn validate_accepts_full_state_name_as_region() {
+        let mut addr = sample();
+        addr.region = "Illinois".to_string();
+        assert!(validate(&addr).is_empty());
+    }
+
+    #[test]
+    fn validate_skips_region_check_for_foreign_address() {
+        let mut addr = sample();
+        addr.region = "Ontario".to_string();
+        addr.country = "Canada".to_string();
+        assert!(validate(&addr).is_empty());
+    }
+
+    #[test]
+    fn validate_checks_region_when_country_is_blank() {
+        let mut addr = sample();
+        addr.region = "Not A State".to_string();
+        addr.country = "".to_string();
+        let issues = validate(&addr);
+        assert_eq!(
+            issues,
+            vec![ValidationIssue::InvalidRegion("Not A State".to_string())]
+        );
     }
 
     #[test]
