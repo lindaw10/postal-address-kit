@@ -2,7 +2,7 @@
 //! `lib.rs`; this file's only job is turning argv into an `Address`
 //! and printing whatever the library function returns.
 
-use addrkit::{format_us_address, parse_us_address, validate, Address};
+use addrkit::{format_address, format_us_address, parse_us_address, validate, Address};
 use std::env;
 use std::process::ExitCode;
 
@@ -22,7 +22,12 @@ fn usage() -> String {
      examples:\n\
      \x20\x20addrkit format --recipient \"Jane Doe\" --street1 \"123 Main St\" \\\n\
      \x20\x20  --city Springfield --region IL --postal 62704\n\
-     \x20\x20addrkit parse \"Jane Doe, 123 Main St, Springfield, IL 62704\""
+     \x20\x20addrkit format --street1 \"10 Downing Street\" --city London \\\n\
+     \x20\x20  --postal \"SW1A 2AA\" --country \"United Kingdom\"\n\
+     \x20\x20addrkit parse \"Jane Doe, 123 Main St, Springfield, IL 62704\"\n\
+     \n\
+     format uses the US envelope layout for a blank or US country, and\n\
+     a generic international layout otherwise."
         .to_string()
 }
 
@@ -63,7 +68,7 @@ fn run(args: Vec<String>) -> Result<String, String> {
     match command.as_str() {
         "format" => {
             let address = parse_address(&rest)?;
-            Ok(format_us_address(&address))
+            Ok(format_address(&address))
         }
         "validate" => {
             let address = parse_address(&rest)?;
@@ -139,6 +144,23 @@ mod tests {
         ]))
         .unwrap();
         assert_eq!(output, "Jane Doe\n123 Main St\nSpringfield, IL 62704");
+    }
+
+    #[test]
+    fn run_formats_foreign_address_with_international_layout() {
+        let output = run(args(&[
+            "format",
+            "--street1",
+            "10 Downing Street",
+            "--city",
+            "London",
+            "--postal",
+            "SW1A 2AA",
+            "--country",
+            "United Kingdom",
+        ]))
+        .unwrap();
+        assert_eq!(output, "10 Downing Street\nLONDON SW1A 2AA\nUNITED KINGDOM");
     }
 
     #[test]

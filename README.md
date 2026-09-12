@@ -30,7 +30,7 @@ logic of its own worth testing separately.
 ## Library usage
 
 ```rust
-use addrkit::{format_us_address, parse_us_address, validate, Address};
+use addrkit::{format_address, format_us_address, parse_us_address, validate, Address};
 
 let address = Address {
     recipient: "Jane Doe".to_string(),
@@ -53,6 +53,23 @@ println!("{}", format_us_address(&address));
 let parsed = parse_us_address("Jane Doe, 123 Main St, Apt 4B, Springfield, IL 62704");
 assert_eq!(parsed.city, address.city);
 assert_eq!(parsed.postal_code, address.postal_code);
+
+let uk_address = Address {
+    street1: "10 Downing Street".to_string(),
+    city: "London".to_string(),
+    postal_code: "SW1A 2AA".to_string(),
+    country: "United Kingdom".to_string(),
+    ..Address::default()
+};
+
+// format_address picks the US or international layout based on
+// the country field; call format_us_address or
+// format_international_address directly if you already know which
+// one you want.
+println!("{}", format_address(&uk_address));
+// 10 Downing Street
+// LONDON SW1A 2AA
+// UNITED KINGDOM
 ```
 
 ## CLI usage
@@ -69,6 +86,12 @@ Jane Doe
 123 Main St
 Apt 4B
 Springfield, IL 62704
+
+$ addrkit format --street1 "10 Downing Street" --city London \
+    --postal "SW1A 2AA" --country "United Kingdom"
+10 Downing Street
+LONDON SW1A 2AA
+UNITED KINGDOM
 
 $ addrkit validate --recipient "Jane Doe" --street1 "123 Main St"
 city is missing
@@ -90,9 +113,9 @@ region, and postal code start and stop.
 
 ## Status
 
-Early skeleton. US formatting, structural validation, freeform parsing,
-and a US state/DC/territory code table are in place; international
-formats are not built yet (see below).
+Early skeleton. US formatting, a generic international layout,
+structural validation, freeform parsing, and a US state/DC/territory
+code table are in place.
 
 `validate` checks the `region` field against that table - `"Illinois"`,
 `"illinois"`, and `"IL"` all pass, anything else doesn't - but only for
@@ -100,9 +123,15 @@ addresses that look domestic (a blank or US `country` field). A region
 paired with a non-US country is left alone, since the table has nothing
 to say about a Canadian province or a UK county.
 
+The international layout (`format_international_address`, or
+`format_address` when the country isn't domestic US) is deliberately
+basic: one line each for recipient, street1, and street2, then a
+locality line (city, region, postal code) and a country line, both in
+capitals. Real per-country conventions - postal code before the city
+in some countries, no region line at all in others - aren't modeled.
+
 ## Roadmap
 
-- Basic international address formats beyond the US
 - `--json` output mode for the CLI
 - Property-based tests for the normalization functions
 

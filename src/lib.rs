@@ -301,6 +301,100 @@ pub fn format_us_address(address: &Address) -> String {
     lines.join("\n")
 }
 
+/// Renders an address using a generic international layout:
+///
+/// ```text
+/// Jane Doe
+/// 10 Downing Street
+/// Westminster
+/// LONDON SW1A 2AA
+/// UNITED KINGDOM
+/// ```
+///
+/// Unlike [`format_us_address`], this never rewrites the region into a
+/// coded abbreviation - there's no single lookup table that covers
+/// every country's provinces - and it always prints the country line
+/// in capitals rather than only for non-domestic addresses, since this
+/// function is for non-domestic mail to begin with. The locality line
+/// (city, region, postal code) is also capitalized: that and putting
+/// the country on its own final line are the two conventions the
+/// Universal Postal Union's addressing guidelines agree on across
+/// countries, even though the internal order of city/region/postal
+/// code varies by country in ways a single function can't cover.
+///
+/// Blank fields are skipped rather than left as empty lines. This
+/// never fails; pass the result through [`validate`] first if you need
+/// to know whether the input was actually complete - though note
+/// `validate`'s region check is US-specific and skips non-US addresses
+/// entirely.
+pub fn format_international_address(address: &Address) -> String {
+    let mut lines = Vec::new();
+
+    let recipient = normalize_whitespace(&address.recipient);
+    if !recipient.is_empty() {
+        lines.push(recipient);
+    }
+
+    let street1 = normalize_whitespace(&address.street1);
+    if !street1.is_empty() {
+        lines.push(street1);
+    }
+
+    let street2 = normalize_whitespace(&address.street2);
+    if !street2.is_empty() {
+        lines.push(street2);
+    }
+
+    let city = normalize_whitespace(&address.city);
+    let region = normalize_whitespace(&address.region);
+    let postal = normalize_whitespace(&address.postal_code);
+
+    let mut locality_line = String::new();
+    if !city.is_empty() {
+        locality_line.push_str(&city);
+    }
+    if !region.is_empty() {
+        if !locality_line.is_empty() {
+            locality_line.push_str(", ");
+        }
+        locality_line.push_str(&region);
+    }
+    if !postal.is_empty() {
+        if !locality_line.is_empty() {
+            locality_line.push(' ');
+        }
+        locality_line.push_str(&postal);
+    }
+    if !locality_line.is_empty() {
+        lines.push(locality_line.to_uppercase());
+    }
+
+    let country = normalize_whitespace(&address.country);
+    if !country.is_empty() {
+        lines.push(country.to_uppercase());
+    }
+
+    lines.join("\n")
+}
+
+/// Renders an address as a mailing block, picking the US envelope
+/// layout or the generic international layout based on the `country`
+/// field.
+///
+/// A blank `country` is treated as domestic, matching [`validate`]'s
+/// rule for when to run the US region check: most addresses in this
+/// library's target use case (US-based senders) never bothered to
+/// fill in "US" to begin with. Set `country` explicitly for addresses
+/// you know are foreign.
+pub fn format_address(address: &Address) -> String {
+    let country = normalize_whitespace(&address.country);
+    if country.is_empty() || is_domestic_us(&country) {
+        format_us_address(address)
+    } else {
+        format_international_address(address)
+    }
+}
+
 /// Parses a freeform US address string into an [`Address`].
 ///
 /// Accepts either the multi-line block that [`format_us_address`]
@@ -561,6 +655,71 @@ mod tests {
     #[test]
     fn validate_accepts_complete_address() {
         assert!(validate(&sample()).is_empty());
+    }
+
+    #[test]
+    fn format_international_address_produces_expected_block() {
+        let addr = Address {
+            recipient: "Jane Doe".to_string(),
+            street1: "10 Downing Street".to_string(),
+            street2: "Westminster".to_string(),
+            city: "London".to_string(),
+            region: "".to_string(),
+            postal_code: "SW1A 2AA".to_string(),
+            country: "United Kingdom".to_string(),
+        };
+        assert_eq!(
+            format_international_address(&addr),
+            "Jane Doe\n10 Downing Street\nWestminster\nLONDON SW1A 2AA\nUNITED KINGDOM"
+        );
+    }
+
+    #[test]
+    fn format_international_address_includes_region_when_present() {
+        let addr = Address {
+            recipient: "".to_string(),
+            street1: "1 Rue de Rivoli".to_string(),
+            street2: "".to_string(),
+            city: "Paris".to_string(),
+            region: "Ile-de-France".to_string(),
+            postal_code: "75001".to_string(),
+            country: "France".to_string(),
+        };
+        assert_eq!(
+            format_international_address(&addr),
+            "1 Rue de Rivoli\nPARIS, ILE-DE-FRANCE 75001\nFRANCE"
+        );
+    }
+
+    #[test]
+    fn format_international_address_skips_blank_fields() {
+        let addr = Address {
+            recipient: "".to_string(),
+            street1: "1 Rue de Rivoli".to_string(),
+            street2: "".to_string(),
+            city: "".to_string(),
+            region: "".to_string(),
+            postal_code: "".to_string(),
+            country: "France".to_string(),
+        };
+        assert_eq!(format_international_address(&addr), "1 Rue de Rivoli\nFRANCE");
+    }
+
+    #[test]
+    fn format_address_dispatches_to_us_layout_for_blank_or_us_country() {
+        let mut addr = sample();
+        addr.country = "".to_string();
+        assert_eq!(format_address(&addr), format_us_address(&addr));
+
+        addr.country = "US".to_string();
+        assert_eq!(format_address(&addr), format_us_address(&addr));
+    }
+
+    #[test]
+    fn format_address_dispatches_to_international_layout_for_foreign_country() {
+        let mut addr = sample();
+        addr.country = "Canada".to_string();
+        assert_eq!(format_address(&addr), format_international_address(&addr));
     }
 
     #[test]
